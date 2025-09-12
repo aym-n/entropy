@@ -1,0 +1,12 @@
+rules:
+  - pattern: ".*invoice.*\\.pdf$"
+    target: "Documents/Finance/Invoices"
+
+  - pattern: ".*resume.*\\.pdf$"
+    target: "Documents/Resumes"
+
+gpt:
+  enabled: true
+  instructions: |
+    You are a file organization assistant. Given filename and MIME type,
+    suggest a folder path. Respond only with the folder path.
