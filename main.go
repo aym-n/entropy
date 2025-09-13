@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,12 +21,39 @@ type Rule struct {
 
 type GptConfig struct {
 	Enabled      bool   `yaml:"enabled"`
+	ApiKey       string `yaml:"api_key"`
+	Model        string `yaml:"model"`
 	Instructions string `yaml:"instructions"`
 }
 
 type Config struct {
 	Rules []Rule    `yaml:"rules"`
 	Gpt   GptConfig `yaml:"gpt"`
+}
+
+func getGenAIClient(apiKey string) *genai.Client {
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create GenAI client: %v", err)
+	}
+	return client
+}
+
+func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions, filename string) string {
+	prompt := fmt.Sprintf("%s\nFilename: %s", instructions, filename)
+	resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
+	if err != nil {
+		log.Println("GenAI error:", err)
+		return "Unsorted"
+	}
+	text := resp.Text()
+	if text == "" {
+		return "Unsorted"
+	}
+	return text
 }
 
 func loadConfig(path string) Config {
@@ -88,6 +118,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	var client *genai.Client
+	if config.Gpt.Enabled {
+		client = getGenAIClient(config.Gpt.ApiKey)
+	}
+
 	log.Println("Watching 'magic' folder...")
 
 	for {
@@ -97,13 +132,18 @@ func main() {
 				time.Sleep(500 * time.Millisecond)
 				log.Println("New file detected:", event.Name)
 
-				target := matchRules(event.Name, config.Rules)
-				if target != "" {
-					organizeFile(event.Name, target)
-				} else {
-					log.Println("No matching rule for:", event.Name)
-					// TODO: Add GPT fallback
+				targetFolder := matchRules(event.Name, config.Rules)
+
+				if targetFolder == "" && config.Gpt.Enabled {
+					targetFolder = suggestFolderWithGenAI(context.Background(), client, config.Gpt.Model, config.Gpt.Instructions, event.Name)
+					log.Println("AI suggested folder:", targetFolder)
 				}
+
+				if targetFolder == "" {
+					targetFolder = "Unsorted"
+				}
+
+				organizeFile(event.Name, targetFolder)
 			}
 
 		case err := <-watcher.Errors:
