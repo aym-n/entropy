@@ -12,8 +12,7 @@ Thumbs.db
 *.swp
 *.swo
 
-magic/
-organized/
+entropy/
 
 vendor/
 rules.yaml

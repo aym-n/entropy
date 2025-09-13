@@ -43,6 +43,8 @@ func getGenAIClient(apiKey string) *genai.Client {
 }
 
 func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions, filename string) string {
+	// TODO: add file metadata and content as context to the model
+	// TODO: add context about folder structure
 	prompt := fmt.Sprintf("%s\nFilename: %s", instructions, filename)
 	resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
 	if err != nil {
@@ -57,7 +59,7 @@ func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName
 }
 
 func loadConfig(path string) Config {
-	// TODO: have a config file , rules and knowlege / custom instructions
+	// TODO: have a config file , rules and knowledge / custom instructions
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Fatalf("couldn't open file %s: %v", path, err)
@@ -82,26 +84,26 @@ func matchRules(filename string, rules []Rule) string {
 	return ""
 }
 
-func organizeFile(filePath string, targetFolder string) {
-	filename := filepath.Base(filePath)
+func organizeItem(srcPath, targetFolder string) {
+	base := filepath.Base(srcPath)
+	destDir := filepath.Join("entropy", targetFolder)
 
-	// TODO: add auto rename functionality
-	destDir := filepath.Join("organized", targetFolder)
-	os.MkdirAll(destDir, os.ModePerm) // create target folder if it doesn't exist
-	destPath := filepath.Join(destDir, filename)
-
-	err := os.Rename(filePath, destPath)
-	if err != nil {
-		log.Printf("Failed to move %s: %v", filename, err)
+	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+		log.Printf("Failed to create dir %s: %v", destDir, err)
 		return
 	}
 
-	log.Printf("Moved %s → %s", filename, destDir)
+	destPath := filepath.Join(destDir, base)
+	if err := os.Rename(srcPath, destPath); err != nil {
+		log.Printf("Failed to move %s: %v", base, err)
+		return
+	}
+
+	log.Printf("Moved %s → %s", base, destDir)
 }
 
 func main() {
-	os.MkdirAll("magic", os.ModePerm)
-	os.MkdirAll("organized", os.ModePerm)
+	os.MkdirAll("entropy", os.ModePerm)
 
 	config := loadConfig("rules.yaml")
 	log.Println("Loaded rules:", config.Rules)
@@ -112,7 +114,7 @@ func main() {
 	}
 
 	defer watcher.Close()
-	err = watcher.Add("magic")
+	err = watcher.Add("entropy")
 
 	if err != nil {
 		log.Fatal(err)
@@ -123,16 +125,29 @@ func main() {
 		client = getGenAIClient(config.Gpt.ApiKey)
 	}
 
-	log.Println("Watching 'magic' folder...")
+	log.Println("Watching 'entropy' folder...")
 
 	for {
 		select {
 		case event := <-watcher.Events:
 			if event.Op&fsnotify.Create == fsnotify.Create {
+
+				// skips directories
+				fi, err := os.Stat(event.Name)
+				if err == nil && fi.IsDir() {
+					// TODO: handle directories as a single unit , you can add some config file int the folder to handle how that folder should be treated
+					continue
+				}
+
+				if filepath.Dir(event.Name) != "entropy" {
+					continue
+				}
+
 				time.Sleep(500 * time.Millisecond)
 				log.Println("New file detected:", event.Name)
 
-				targetFolder := matchRules(event.Name, config.Rules)
+				name := filepath.Base(event.Name)
+				targetFolder := matchRules(name, config.Rules)
 
 				if targetFolder == "" && config.Gpt.Enabled {
 					targetFolder = suggestFolderWithGenAI(context.Background(), client, config.Gpt.Model, config.Gpt.Instructions, event.Name)
@@ -143,7 +158,7 @@ func main() {
 					targetFolder = "Unsorted"
 				}
 
-				organizeFile(event.Name, targetFolder)
+				organizeItem(event.Name, targetFolder)
 			}
 
 		case err := <-watcher.Errors:
