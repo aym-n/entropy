@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -29,6 +30,20 @@ type GptConfig struct {
 type Config struct {
 	Rules []Rule    `yaml:"rules"`
 	Gpt   GptConfig `yaml:"gpt"`
+}
+
+func isIgnored(name string) bool {
+	ignoredFiles := []string{".DS_Store", "Thumbs.db"} // TODO: have OS wise ignored files as well as have config option to add more
+	base := filepath.Base(name)
+	if strings.HasPrefix(base, "._") {
+		return true
+	}
+	for _, ign := range ignoredFiles {
+		if base == ign {
+			return true
+		}
+	}
+	return false
 }
 
 func getGenAIClient(apiKey string) *genai.Client {
@@ -147,6 +162,11 @@ func main() {
 				log.Println("New file detected:", event.Name)
 
 				name := filepath.Base(event.Name)
+
+				if isIgnored(name) {
+					log.Println("Ignored system file:", name)
+					continue
+				}
 				targetFolder := matchRules(name, config.Rules)
 
 				if targetFolder == "" && config.Gpt.Enabled {
@@ -158,6 +178,7 @@ func main() {
 					targetFolder = "Unsorted"
 				}
 
+				targetFolder = strings.TrimSpace(targetFolder)
 				organizeItem(event.Name, targetFolder)
 			}
 
