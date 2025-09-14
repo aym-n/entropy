@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"golang.org/x/time/rate"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,11 @@ type GptConfig struct {
 type Config struct {
 	Rules []Rule    `yaml:"rules"`
 	Gpt   GptConfig `yaml:"gpt"`
+}
+
+type Job struct {
+	filename string
+	resultCh chan string
 }
 
 func isIgnored(name string) bool {
@@ -57,24 +63,44 @@ func getGenAIClient(apiKey string) *genai.Client {
 	return client
 }
 
-func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions, filename string) string {
+var (
+	jobQueue = make(chan Job, 100)
+	limiter  = rate.NewLimiter(rate.Every(3*time.Second), 1)
+)
+
+func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions string) {
 	// TODO: add file metadata and content as context to the model
 	// TODO: add context about folder structure
-	prompt := fmt.Sprintf("%s\nFilename: %s", instructions, filename)
-	resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
-	if err != nil {
-		log.Println("GenAI error:", err)
-		return "Unsorted"
-	}
-	text := resp.Text()
-	if text == "" {
-		return "Unsorted"
-	}
-	return text
+	go func() {
+		for job := range jobQueue {
+			// rate limit
+			if err := limiter.Wait(ctx); err != nil {
+				log.Println("Rate limiter error:", err)
+				job.resultCh <- "Unsorted"
+				continue
+			}
+
+			prompt := fmt.Sprintf("%s\nFilename: %s", instructions, job.filename)
+			resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
+			if err != nil {
+				log.Println("GenAI error:", err)
+				job.resultCh <- "Unsorted"
+				continue
+			}
+
+			text := strings.TrimSpace(resp.Text())
+			if text == "" {
+				job.resultCh <- "Unsorted"
+			} else {
+				job.resultCh <- text
+			}
+		}
+	}()
 }
 
 func loadConfig(path string) Config {
 	// TODO: have a config file , rules and knowledge / custom instructions
+	// TODO: add config to preserve folder structure ( no new folders are genrated )
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Fatalf("couldn't open file %s: %v", path, err)
@@ -121,7 +147,6 @@ func main() {
 	os.MkdirAll("entropy", os.ModePerm)
 
 	config := loadConfig("rules.yaml")
-	log.Println("Loaded rules:", config.Rules)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -138,6 +163,7 @@ func main() {
 	var client *genai.Client
 	if config.Gpt.Enabled {
 		client = getGenAIClient(config.Gpt.ApiKey)
+		suggestFolderWithGenAI(context.Background(), client, config.Gpt.Model, config.Gpt.Instructions)
 	}
 
 	log.Println("Watching 'entropy' folder...")
@@ -170,7 +196,9 @@ func main() {
 				targetFolder := matchRules(name, config.Rules)
 
 				if targetFolder == "" && config.Gpt.Enabled {
-					targetFolder = suggestFolderWithGenAI(context.Background(), client, config.Gpt.Model, config.Gpt.Instructions, event.Name)
+					resultCh := make(chan string, 1)
+					jobQueue <- Job{filename: event.Name, resultCh: resultCh}
+					targetFolder = <-resultCh // waits for worker
 					log.Println("AI suggested folder:", targetFolder)
 				}
 
