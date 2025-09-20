@@ -68,9 +68,36 @@ var (
 	limiter  = rate.NewLimiter(rate.Every(3*time.Second), 1)
 )
 
+func getFolderStructure(root string) string {
+	var b strings.Builder
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			rel, _ := filepath.Rel(root, path)
+			if rel == "." {
+				return nil
+			}
+			b.WriteString(rel + "\n")
+		}
+		return nil
+	})
+	return b.String()
+}
+
+func getFileMetadata(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	ext := filepath.Ext(path)
+	size := info.Size()
+
+	return fmt.Sprintf("Extension: %s, Size: %d bytes", ext, size)
+}
+
 func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions string) {
-	// TODO: add file metadata and content as context to the model
-	// TODO: add context about folder structure
 	go func() {
 		for job := range jobQueue {
 			// rate limit
@@ -79,8 +106,15 @@ func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName
 				job.resultCh <- "Unsorted"
 				continue
 			}
+			folders := getFolderStructure("entropy")
+			metadata := getFileMetadata(job.filename)
 
-			prompt := fmt.Sprintf("%s\nFilename: %s", instructions, job.filename)
+			prompt := fmt.Sprintf(`%s 
+			Filename: %s
+			Metadata: %s
+			Existing folder structure: %s`, instructions, filepath.Base(job.filename), metadata, folders)
+			log.Println(prompt)
+
 			resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
 			if err != nil {
 				log.Println("GenAI error:", err)
@@ -198,7 +232,7 @@ func main() {
 				if targetFolder == "" && config.Gpt.Enabled {
 					resultCh := make(chan string, 1)
 					jobQueue <- Job{filename: event.Name, resultCh: resultCh}
-					targetFolder = <-resultCh // waits for worker
+					targetFolder = <-resultCh
 					log.Println("AI suggested folder:", targetFolder)
 				}
 
