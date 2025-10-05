@@ -16,6 +16,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type Options struct {
+	PreserveStructure bool   `yaml:"preserve_structure"`
+	KnowledgeBase     string `yaml:"knowledge_base"`
+}
+
 type Rule struct {
 	Pattern string `yaml:"pattern"`
 	Target  string `yaml:"target"`
@@ -29,9 +34,10 @@ type GptConfig struct {
 }
 
 type Config struct {
-	Ignore IgnoreConfig `yaml:"ignore"`
-	Rules  []Rule       `yaml:"rules"`
-	Gpt    GptConfig    `yaml:"gpt"`
+	Options Options      `yaml:"options"`
+	Ignore  IgnoreConfig `yaml:"ignore"`
+	Rules   []Rule       `yaml:"rules"`
+	Gpt     GptConfig    `yaml:"gpt"`
 }
 
 type Job struct {
@@ -134,23 +140,44 @@ func getFileMetadata(path string) string {
 	return fmt.Sprintf("Extension: %s, Size: %d bytes", ext, size)
 }
 
-func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions string) {
+func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions, knowledge string, preserve bool) {
 	go func() {
 		for job := range jobQueue {
-			// rate limit
 			if err := limiter.Wait(ctx); err != nil {
 				log.Println("Rate limiter error:", err)
 				job.resultCh <- "Unsorted"
 				continue
 			}
+
 			folders := getFolderStructure("entropy")
 			metadata := getFileMetadata(job.filename)
 
-			prompt := fmt.Sprintf(`%s 
-			Filename: %s
-			Metadata: %s
-			Existing folder structure: %s`, instructions, filepath.Base(job.filename), metadata, folders)
-			log.Println(prompt)
+			prompt := fmt.Sprintf(`%s
+
+Knowledge base:
+%s
+
+Filename: %s
+Metadata: %s
+Existing folder structure: %s
+
+Constraints:
+- Respond only with a folder path.
+- %s`,
+				instructions,
+				knowledge,
+				filepath.Base(job.filename),
+				metadata,
+				folders,
+				func() string {
+					if preserve {
+						return "Do not suggest new folders. Only pick from existing ones."
+					}
+					return "You may suggest new folders if appropriate."
+				}(),
+			)
+
+			log.Println("Prompt:\n", prompt)
 
 			resp, err := client.Models.GenerateContent(ctx, modelName, genai.Text(prompt), nil)
 			if err != nil {
@@ -170,8 +197,6 @@ func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName
 }
 
 func loadConfig(path string) Config {
-	// TODO: have a config file , rules and knowledge / custom instructions
-	// TODO: add config to preserve folder structure ( no new folders are genrated )
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Fatalf("couldn't open file %s: %v", path, err)
@@ -186,6 +211,18 @@ func loadConfig(path string) Config {
 	return config
 }
 
+func loadKnowledgeBase(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("Could not read knowledge base %s: %v", path, err)
+		return ""
+	}
+	return string(data)
+}
+
 func matchRules(filename string, rules []Rule) string {
 	for _, rule := range rules {
 		re := regexp.MustCompile(rule.Pattern)
@@ -196,13 +233,21 @@ func matchRules(filename string, rules []Rule) string {
 	return ""
 }
 
-func organizeItem(srcPath, targetFolder string) {
+func organizeItem(srcPath, targetFolder string, preserve bool) {
 	base := filepath.Base(srcPath)
 	destDir := filepath.Join("entropy", targetFolder)
 
-	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
-		log.Printf("Failed to create dir %s: %v", destDir, err)
-		return
+	if preserve {
+		// check if folder exists before moving
+		if _, err := os.Stat(destDir); os.IsNotExist(err) {
+			log.Printf("Skipping %s → %s (preserve_structure=true, folder doesn't exist)", base, destDir)
+			return
+		}
+	} else {
+		if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+			log.Printf("Failed to create dir %s: %v", destDir, err)
+			return
+		}
 	}
 
 	destPath := filepath.Join(destDir, base)
@@ -218,6 +263,7 @@ func main() {
 	os.MkdirAll("entropy", os.ModePerm)
 
 	config := loadConfig("rules.yaml")
+	knowledge := loadKnowledgeBase(config.Options.KnowledgeBase)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -234,7 +280,14 @@ func main() {
 	var client *genai.Client
 	if config.Gpt.Enabled {
 		client = getGenAIClient(config.Gpt.ApiKey)
-		suggestFolderWithGenAI(context.Background(), client, config.Gpt.Model, config.Gpt.Instructions)
+		suggestFolderWithGenAI(
+			context.Background(),
+			client,
+			config.Gpt.Model,
+			config.Gpt.Instructions,
+			knowledge,
+			config.Options.PreserveStructure,
+		)
 	}
 
 	log.Println("Watching 'entropy' folder...")
@@ -278,7 +331,7 @@ func main() {
 				}
 
 				targetFolder = strings.TrimSpace(targetFolder)
-				organizeItem(event.Name, targetFolder)
+				organizeItem(event.Name, targetFolder, config.Options.PreserveStructure)
 			}
 
 		case err := <-watcher.Errors:
