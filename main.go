@@ -29,8 +29,9 @@ type GptConfig struct {
 }
 
 type Config struct {
-	Rules []Rule    `yaml:"rules"`
-	Gpt   GptConfig `yaml:"gpt"`
+	Ignore IgnoreConfig `yaml:"ignore"`
+	Rules  []Rule       `yaml:"rules"`
+	Gpt    GptConfig    `yaml:"gpt"`
 }
 
 type Job struct {
@@ -38,17 +39,53 @@ type Job struct {
 	resultCh chan string
 }
 
-func isIgnored(name string) bool {
-	ignoredFiles := []string{".DS_Store", "Thumbs.db"} // TODO: have OS wise ignored files as well as have config option to add more
-	base := filepath.Base(name)
+type IgnoreConfig struct {
+	OSDefaults bool     `yaml:"os_defaults"`
+	Files      []string `yaml:"files"`
+	Extensions []string `yaml:"extensions"`
+	Folders    []string `yaml:"folders"`
+}
+
+func isIgnored(path string, cfg IgnoreConfig) bool {
+	base := filepath.Base(path)
+
+	// ignore prefixed "._"
 	if strings.HasPrefix(base, "._") {
 		return true
 	}
-	for _, ign := range ignoredFiles {
+
+	// OS defaults
+	if cfg.OSDefaults {
+		defaults := []string{".DS_Store", "Thumbs.db", "desktop.ini"}
+		for _, ign := range defaults {
+			if base == ign {
+				return true
+			}
+		}
+	}
+
+	// explicit filenames
+	for _, ign := range cfg.Files {
 		if base == ign {
 			return true
 		}
 	}
+
+	// extensions
+	ext := strings.ToLower(filepath.Ext(base))
+	for _, ignExt := range cfg.Extensions {
+		if strings.ToLower(ignExt) == ext {
+			return true
+		}
+	}
+
+	// folders
+	for _, folder := range cfg.Folders {
+		if strings.Contains(path, folder) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -223,8 +260,8 @@ func main() {
 
 				name := filepath.Base(event.Name)
 
-				if isIgnored(name) {
-					log.Println("Ignored system file:", name)
+				if isIgnored(event.Name, config.Ignore) {
+					log.Println("Ignored file/folder by config:", name)
 					continue
 				}
 				targetFolder := matchRules(name, config.Rules)
