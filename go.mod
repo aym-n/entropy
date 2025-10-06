@@ -22,6 +22,8 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
+	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect

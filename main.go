@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	pdf "github.com/ledongthuc/pdf"
+	"github.com/rwcarlsen/goexif/exif"
 	"golang.org/x/time/rate"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -129,15 +133,41 @@ func getFolderStructure(root string) string {
 	return b.String()
 }
 
+func extractImageMetadata(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	x, err := exif.Decode(f)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", x)
+}
+
 func getFileMetadata(path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		return ""
 	}
-	ext := filepath.Ext(path)
+	ext := strings.ToLower(filepath.Ext(path))
 	size := info.Size()
 
-	return fmt.Sprintf("Extension: %s, Size: %d bytes", ext, size)
+	switch ext {
+	case ".txt", ".md", ".csv", ".json", ".html":
+		snippet := getFileContentSnippet(path, 500)
+		return fmt.Sprintf("Extension: %s, Size: %d bytes, Snippet: %q", ext, size, snippet)
+	case ".pdf":
+		text := extractPDFText(path)
+		return fmt.Sprintf("Extension: %s, Size: %d bytes, Content: %q", ext, size, text)
+	case ".jpg", ".jpeg", ".png":
+		meta := extractImageMetadata(path)
+		return fmt.Sprintf("Extension: %s, Size: %d bytes, Metadata: %q", ext, size, meta)
+	default:
+		return fmt.Sprintf("Extension: %s, Size: %d bytes", ext, size)
+	}
 }
 
 func suggestFolderWithGenAI(ctx context.Context, client *genai.Client, modelName, instructions, knowledge string, preserve bool) {
@@ -259,10 +289,42 @@ func organizeItem(srcPath, targetFolder string, preserve bool) {
 	log.Printf("Moved %s → %s", base, destDir)
 }
 
+func getFileContentSnippet(path string, limit int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+
+	defer f.Close()
+
+	buf := make([]byte, limit)
+	n, _ := f.Read(buf)
+	return string(buf[:n])
+}
+
+func extractPDFText(path string) string {
+	f, r, err := pdf.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var buf bytes.Buffer
+	b, err := r.GetPlainText()
+	if err == nil {
+		io.Copy(&buf, b)
+	}
+	text := buf.String()
+	if len(text) > 500 {
+		text = text[:500] + "..."
+	}
+	return text
+}
+
 func main() {
 	os.MkdirAll("entropy", os.ModePerm)
 
 	config := loadConfig("rules.yaml")
+	// TODO: add a config to determine the folder to watch
 	knowledge := loadKnowledgeBase(config.Options.KnowledgeBase)
 
 	watcher, err := fsnotify.NewWatcher()
@@ -300,7 +362,6 @@ func main() {
 				// skips directories
 				fi, err := os.Stat(event.Name)
 				if err == nil && fi.IsDir() {
-					// TODO: handle directories as a single unit , you can add some config file int the folder to handle how that folder should be treated
 					continue
 				}
 
