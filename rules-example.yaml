@@ -1,3 +1,22 @@
+options:
+  preserve_structure: false
+  knowledge_base: "knowledge.md"
+
+ignore:
+  os_defaults: true 
+  files:
+    - ".DS_Store"
+    - "Thumbs.db"
+    - "desktop.ini"
+  extensions:
+    - ".log"
+    - ".tmp"
+    - ".bak"
+  folders:
+    - "node_modules"
+    - "tmp"
+    - ".git"
+
 rules:
   - pattern: ".*invoice.*\\.pdf$"
     target: "Documents/Finance/Invoices"
@@ -8,7 +27,7 @@ rules:
 gpt:
   enabled: true
   api_key: "API_KEY"
-  model: "gemini-2.0-flash"
+  model: "gemini-2.0-flash-lite"
   instructions: |
     You are a file organization assistant. Given filename and MIME type,
     suggest a folder path. Respond only with the folder path.
