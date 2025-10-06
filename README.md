@@ -1,4 +1,4 @@
-# entropy 🌀: AI-Powered File Sorter
+# entropy 🌀: ai powered file organiztion
 
 **Entropy** is a automated file organizer written in **Go**. It watches a designated folder (the "entropy" folder) and automatically moves new files into relevant subdirectories based on either **user-defined regular expressions** or intelligent **suggestions from the Google Gemini AI**. It is designed to reduce file clutter with minimal configuration.
 -----
@@ -69,7 +69,7 @@ Any file related to 'go' or 'golang' should be placed in "Development/Go".
 1.  **Clone the repository:**
 
     ```bash
-    git clone [your-repo-link]
+    git clone https://github.com/aym-n/entropy
     cd entropy
     ```
 
@@ -88,7 +88,7 @@ The application automatically creates an `entropy` folder in the working directo
 
 **Required Files:**
 
-  * `main.go` (Your provided code)
+  * `main.go`
   * `go.mod` / `go.sum`
   * `rules.yaml` (Your provided configuration)
   * `knowledge.md` (Optional, referenced in `rules.yaml`)
