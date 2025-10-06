@@ -281,12 +281,28 @@ func organizeItem(srcPath, targetFolder string, preserve bool) {
 	}
 
 	destPath := filepath.Join(destDir, base)
+
+	if _, err := os.Stat(destPath); err == nil {
+		ext := filepath.Ext(base)
+		name := strings.TrimSuffix(base, ext)
+
+		for i := 1; ; i++ {
+			newName := fmt.Sprintf("%s - %d%s", name, i, ext)
+			newPath := filepath.Join(destDir, newName)
+
+			if _, err := os.Stat(newPath); os.IsNotExist(err) {
+				destPath = newPath
+				break
+			}
+		}
+	}
+
 	if err := os.Rename(srcPath, destPath); err != nil {
 		log.Printf("Failed to move %s: %v", base, err)
 		return
 	}
 
-	log.Printf("Moved %s → %s", base, destDir)
+	log.Printf("Moved %s → %s", base, destPath)
 }
 
 func getFileContentSnippet(path string, limit int) string {
